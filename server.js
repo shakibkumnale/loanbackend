@@ -28,23 +28,38 @@ const corsOptions = {
 
 // Middleware
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('dev'));
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 30000, // Timeout after 30s instead of 10s
-  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-  connectTimeoutMS: 30000, // Give up initial connection after 30s
-  // Maintain up to 10 socket connections
-  maxPoolSize: 10,
-  // Keep trying to send operations for 5 seconds
-  heartbeatFrequencyMS: 2000,
-})
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.log('MongoDB connection error:', err));
+// Connection to MongoDB - with retry logic
+const connectWithRetry = () => {
+  console.log('MongoDB connection with retry');
+  mongoose.connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    serverSelectionTimeoutMS: 30000,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 30000,
+    maxPoolSize: 10,
+    heartbeatFrequencyMS: 2000,
+  })
+  .then(() => {
+    console.log('MongoDB connected successfully');
+  })
+  .catch(err => {
+    console.log('MongoDB connection error:', err);
+    console.log('Retrying in 5 seconds...');
+    setTimeout(connectWithRetry, 5000);
+  });
+};
+
+connectWithRetry();
+
+// Health check route for Vercel
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'Server is healthy' });
+});
 
 // Routes
 app.use('/api/borrowers', borrowerRoutes);
@@ -65,11 +80,21 @@ app.use((err, req, res, next) => {
   res.status(500).json({
     success: false,
     message: 'Server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error'
   });
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-}); 
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.log('UNHANDLED REJECTION! 💥 Shutting down...');
+  console.log(err.name, err.message);
+  // Don't crash the server on Vercel
+  // process.exit(1);
+});
+
+module.exports = app; // For Vercel serverless functions 

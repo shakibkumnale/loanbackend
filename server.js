@@ -35,6 +35,13 @@ app.use(morgan('dev'));
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 30000, // Timeout after 30s instead of 10s
+  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+  connectTimeoutMS: 30000, // Give up initial connection after 30s
+  // Maintain up to 10 socket connections
+  maxPoolSize: 10,
+  // Keep trying to send operations for 5 seconds
+  heartbeatFrequencyMS: 2000,
 })
 .then(() => console.log('MongoDB connected'))
 .catch(err => console.log('MongoDB connection error:', err));

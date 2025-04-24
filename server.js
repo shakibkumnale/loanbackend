@@ -28,37 +28,37 @@ const corsOptions = {
 
 // Middleware
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json());
 app.use(morgan('dev'));
 
-// Connection to MongoDB - with retry logic
-const connectWithRetry = () => {
-  console.log('MongoDB connection with retry');
-  mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 30000,
-    socketTimeoutMS: 45000,
-    connectTimeoutMS: 30000,
-    maxPoolSize: 10,
-    heartbeatFrequencyMS: 2000,
-  })
-  .then(() => {
-    console.log('MongoDB connected successfully');
-  })
-  .catch(err => {
-    console.log('MongoDB connection error:', err);
-    console.log('Retrying in 5 seconds...');
-    setTimeout(connectWithRetry, 5000);
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  connectTimeoutMS: 30000, // Increase connection timeout to 30 seconds
+  socketTimeoutMS: 45000,  // Increase socket timeout to 45 seconds
+  serverSelectionTimeoutMS: 30000, // Increase server selection timeout
+  maxPoolSize: 10, // Recommended for serverless environments
+  minPoolSize: 0  // Allows the connection pool to close when idle
+})
+.then(() => console.log('MongoDB connected'))
+.catch(err => {
+  console.error('MongoDB connection error:', err);
+  // Additional logging for debugging
+  console.error('Connection details:', {
+    uri: process.env.MONGODB_URI ? 'URI exists (not shown for security)' : 'URI missing',
+    error: err.message,
+    stack: err.stack
   });
-};
+});
 
-connectWithRetry();
+// Add error handling for MongoDB connection issues
+mongoose.connection.on('error', err => {
+  console.error('MongoDB connection error:', err);
+});
 
-// Health check route for Vercel
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'Server is healthy' });
+mongoose.connection.on('disconnected', () => {
+  console.log('MongoDB disconnected');
 });
 
 // Routes
@@ -74,27 +74,51 @@ app.get('/', (req, res) => {
   res.send('Loan Management API is running');
 });
 
+// Health check endpoint to verify MongoDB connection
+app.get('/api/health', async (req, res) => {
+  try {
+    // Check if we're connected to MongoDB
+    if (mongoose.connection.readyState !== 1) {
+      // If not connected, attempt to reconnect
+      await mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        connectTimeoutMS: 30000,
+        socketTimeoutMS: 45000,
+        serverSelectionTimeoutMS: 30000,
+        maxPoolSize: 10,
+        minPoolSize: 0
+      });
+    }
+    
+    // Run a simple query to test the connection
+    const result = await mongoose.connection.db.admin().ping();
+    res.status(200).json({ 
+      status: 'ok',
+      mongoConnection: 'connected',
+      dbPing: result
+    });
+  } catch (err) {
+    console.error('Health check error:', err);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Database connection failed',
+      error: err.message 
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
     success: false,
     message: 'Server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error'
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  console.log('UNHANDLED REJECTION! 💥 Shutting down...');
-  console.log(err.name, err.message);
-  // Don't crash the server on Vercel
-  // process.exit(1);
-});
-
-module.exports = app; // For Vercel serverless functions 
+}); 
